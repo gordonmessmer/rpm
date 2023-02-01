@@ -1523,6 +1523,108 @@ rtld(GNU_HASH)
 [])
 RPMTEST_CLEANUP
 
+AT_SETUP([elf dependencies with fallback])
+AT_KEYWORDS([build])
+
+RPMTEST_CHECK([
+runroot setfattr -n user.rpm_elf_so_version -v 1.0.0 /data/misc/libhello.so.1.0.0
+runroot chmod a-x /data/misc/libhello.so
+runroot ${RPM_CONFIGDIR_PATH}/elfdeps -R --full-name-version-fallback /data/misc/libhello.so
+runroot chmod a+x /data/misc/libhello.so
+runroot ${RPM_CONFIGDIR_PATH}/elfdeps -R --full-name-version-fallback /data/misc/libhello.so
+],
+[0],
+[libc.so.6(GLIBC_2.2.5)(64bit)
+libc.so.6()(64bit)
+rtld(GNU_HASH)
+libc.so.6(GLIBC_2.2.5)(64bit)
+libc.so.6()(64bit)
+rtld(GNU_HASH)
+],
+[])
+
+RPMTEST_CHECK([
+runroot setfattr -n user.rpm_elf_so_version -v 1.0.0 /data/misc/libhello.so.1.0.0
+runroot chmod a-x /data/misc/libhello.so.1.0.0
+runroot ${RPM_CONFIGDIR_PATH}/elfdeps -P --full-name-version-fallback /data/misc/libhello.so
+runroot chmod a+x /data/misc/libhello.so.1.0.0
+runroot ${RPM_CONFIGDIR_PATH}/elfdeps -P --full-name-version-fallback /data/misc/libhello.so
+],
+[0],
+[libhello.so()(64bit) = 1.0.0
+libhello.so()(64bit) = 1.0.0
+],
+[])
+
+RPMTEST_SKIP_IF([! $HAVE_GNU_DLFCN])
+RPMTEST_CHECK([
+export LD_LIBRARY_PATH=${LD_LIBRARY_PATH:+${LD_LIBRARY_PATH}:}${RPMTEST}/data/misc
+runroot setfattr -n user.rpm_elf_so_version -v 1.0.0 /data/misc/libhello.so.1.0.0
+runroot chmod a-x /data/misc/helloexe
+${RPM_CONFIGDIR_PATH}/elfdeps -R --full-name-version-fallback ${RPMTEST}/data/misc/helloexe
+runroot chmod a+x /data/misc/helloexe
+${RPM_CONFIGDIR_PATH}/elfdeps -R --full-name-version-fallback ${RPMTEST}/data/misc/helloexe
+],
+[0],
+[libc.so.6(GLIBC_2.2.5)(64bit)
+libhello.so()(64bit) >= 1.0.0
+libc.so.6()(64bit)
+rtld(GNU_HASH)
+],
+[])
+
+RPMTEST_SKIP_IF([! $HAVE_GNU_DLFCN])
+RPMTEST_CHECK([
+export LD_LIBRARY_PATH=${LD_LIBRARY_PATH:+${LD_LIBRARY_PATH}:}${RPMTEST}/data/misc
+runroot setfattr -n user.rpm_elf_so_version -v 1.0.0 /data/misc/libhello.so.1.0.0
+runroot chmod a-x /data/misc/hellopie
+${RPM_CONFIGDIR_PATH}/elfdeps -R --full-name-version-fallback ${RPMTEST}/data/misc/hellopie
+runroot chmod a+x /data/misc/hellopie
+${RPM_CONFIGDIR_PATH}/elfdeps -R --full-name-version-fallback ${RPMTEST}/data/misc/hellopie
+],
+[0],
+[libc.so.6(GLIBC_2.2.5)(64bit)
+libhello.so()(64bit) >= 1.0.0
+libc.so.6()(64bit)
+rtld(GNU_HASH)
+],
+[])
+
+RPMTEST_SKIP_IF([$HAVE_GNU_DLFCN])
+RPMTEST_CHECK([
+export LD_LIBRARY_PATH=${LD_LIBRARY_PATH:+${LD_LIBRARY_PATH}:}${RPMTEST}/data/misc
+runroot setfattr -n user.rpm_elf_so_version -v 1.0.0 /data/misc/libhello.so.1.0.0
+runroot chmod a-x /data/misc/helloexe
+${RPM_CONFIGDIR_PATH}/elfdeps -R --full-name-version-fallback ${RPMTEST}/data/misc/helloexe
+runroot chmod a+x /data/misc/helloexe
+${RPM_CONFIGDIR_PATH}/elfdeps -R --full-name-version-fallback ${RPMTEST}/data/misc/helloexe
+],
+[0],
+[libc.so.6(GLIBC_2.2.5)(64bit)
+libhello.so()(64bit)
+libc.so.6()(64bit)
+rtld(GNU_HASH)
+],
+[])
+
+RPMTEST_SKIP_IF([$HAVE_GNU_DLFCN])
+RPMTEST_CHECK([
+export LD_LIBRARY_PATH=${LD_LIBRARY_PATH:+${LD_LIBRARY_PATH}:}${RPMTEST}/data/misc
+runroot setfattr -n user.rpm_elf_so_version -v 1.0.0 /data/misc/libhello.so.1.0.0
+runroot chmod a-x /data/misc/hellopie
+${RPM_CONFIGDIR_PATH}/elfdeps -R --full-name-version-fallback ${RPMTEST}/data/misc/hellopie
+runroot chmod a+x /data/misc/hellopie
+${RPM_CONFIGDIR_PATH}/elfdeps -R --full-name-version-fallback ${RPMTEST}/data/misc/hellopie
+],
+[0],
+[libc.so.6(GLIBC_2.2.5)(64bit)
+libhello.so()(64bit)
+libc.so.6()(64bit)
+rtld(GNU_HASH)
+],
+[])
+AT_CLEANUP
+
 # ------------------------------
 # Test spec query functionality
 RPMTEST_SETUP_RW([rpmspec query 1])

@@ -100,3 +100,5 @@ RUN cmake \
 RUN make -j$(nproc) tree
 
 RUN rm -rf /srv/{rpm,build}
+# xattr needed for elfdeps tests:
+RUN setfattr -n user.rpm_elf_so_version -v 1.0.0 /data/misc/libhello.so.1.0.0
