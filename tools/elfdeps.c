@@ -2,6 +2,7 @@
 
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #include <stdlib.h>
 #include <fcntl.h>
@@ -9,9 +10,13 @@
 #include <popt.h>
 #include <gelf.h>
 
+#include <link.h>
+#include <dlfcn.h>
+
 #include <rpm/rpmstring.h>
 #include <rpm/argv.h>
 
+int libtool_version_fallback = 0;
 int soname_only = 0;
 int fake_soname = 1;
 int filter_soname = 1;
@@ -33,6 +38,97 @@ typedef struct elfInfo_s {
     ARGV_t requires;
     ARGV_t provides;
 } elfInfo;
+
+/*
+ * If filename contains ".so" followed by a version number, return
+ * a copy of the version number.
+ */
+static char *getLibtoolVer(const char *filename)
+{
+    const char *so;
+    char dest[PATH_MAX];
+    int destsize = 0;
+    int found_digit = 0, found_dot = 0;
+
+    destsize = readlink(filename, dest, PATH_MAX);
+    if (destsize > 0) {
+	dest[destsize] = 0;
+	filename = dest;
+    }
+    // Start from the end of the string.  Verify that it ends with
+    // numbers and dots, preceded by ".so.".
+    so = filename + strlen(filename);
+    while (so > filename+2) {
+	if (*so == '.') {
+	    found_dot++;
+	    so--;
+	    continue;
+	} else if (strchr("0123456789", *so)) {
+	    found_digit++;
+	    so--;
+	    continue;
+	} else if (strncmp(so-2, ".so.", 4) == 0) {
+	    so+=2;
+	    if (found_digit && found_dot > 1) {
+		return strdup(so);
+	    }
+	    break;
+	} else {
+	    break;
+	}
+    }
+    return NULL;
+}
+
+/*
+ * Rather than re-implement path searching for shared objects, use
+ * dlmopen().  This will still perform initialization and finalization
+ * functions, which isn't necessarily safe, so do that in a separate
+ * process.
+ */
+static char *getLibtoolVerFromShLink(const char *filename)
+{
+    char dest[PATH_MAX];
+    int pipefd[2];
+    pid_t cpid;
+
+    if (pipe(pipefd) == -1) {
+	return NULL;  // Should this be a fatal error instead?
+    }
+    cpid = fork();
+    if (cpid == -1) {
+	return NULL;  // Should this be a fatal error instead?
+    }
+    if (cpid == 0) {
+	void *dl_handle;
+	struct link_map *linkmap;
+	char *version = NULL;
+
+	close(pipefd[0]);
+	dl_handle = dlmopen(LM_ID_NEWLM, filename, RTLD_LAZY);
+	if (dl_handle == NULL) _exit(0);
+	if (dlinfo(dl_handle, RTLD_DI_LINKMAP, &linkmap) != -1) {
+	    version = getLibtoolVer(linkmap->l_name);
+	}
+	(void) write(pipefd[1], version, strlen(version));
+	close(pipefd[1]);
+	free(version);
+	dlclose(dl_handle);
+	_exit(0);
+    } else {
+	ssize_t len;
+	close(pipefd[1]);
+	dest[0] = 0;
+	len = read(pipefd[0], dest, sizeof(dest));
+	if (len > 0) dest[len] = 0;
+	close(pipefd[0]);
+	wait(NULL);
+    }
+    if (strlen(dest) > 0)
+	return strdup(dest);
+    else
+	return NULL;
+}
 
 /*
  * Rough soname sanity filtering: all sane soname's dependencies need to
@@ -96,15 +192,30 @@ static const char *mkmarker(GElf_Ehdr *ehdr)
     return marker;
 }
 
+static int findSonameInDeps(ARGV_t deps, const char *soname)
+{
+    for (ARGV_t dep = deps; *dep; dep++) {
+	if (strncmp(*dep, soname, strlen(soname)) == 0) return 1;
+    }
+    return 0;
+}
+
 static void addDep(ARGV_t *deps,
-		   const char *soname, const char *ver, const char *marker)
+		   const char *soname, const char *ver, const char *marker,
+		   const char *compare_op, const char *fallback_ver)
 {
     char *dep = NULL;
 
     if (skipSoname(soname))
 	return;
 
-    if (ver || marker) {
+    if (compare_op && fallback_ver) {
+	// when versioned symbols aren't available, the libtool version
+	// might be used to generate a minimum dependency version.
+	rasprintf(&dep,
+		  "%s()%s %s %s", soname, marker ? marker : "",
+		  compare_op, fallback_ver);
+    } else if (ver || marker) {
 	rasprintf(&dep,
 		  "%s(%s)%s", soname, ver ? ver : "", marker ? marker : "");
     }
@@ -144,10 +255,10 @@ static void processVerDef(Elf_Scn *scn, GElf_Shdr *shdr, elfInfo *ei)
 		    auxoffset += aux->vda_next;
 		    continue;
 		} else if (soname && !soname_only) {
-		    addDep(&ei->provides, soname, s, ei->marker);
+		    addDep(&ei->provides, soname, s, ei->marker, NULL, NULL);
 		}
 	    }
-		    
+
 	}
     }
     rfree(soname);
@@ -183,7 +294,7 @@ static void processVerNeed(Elf_Scn *scn, GElf_Shdr *shdr, elfInfo *ei)
 		    break;
 
 		if (genRequires(ei) && soname && !soname_only) {
-		    addDep(&ei->requires, soname, s, ei->marker);
+		    addDep(&ei->requires, soname, s, ei->marker, NULL, NULL);
 		}
 		auxoffset += aux->vna_next;
 	    }
@@ -223,8 +334,17 @@ static void processDynamic(Elf_Scn *scn, GElf_Shdr *shdr, elfInfo *ei)
 	    case DT_NEEDED:
 		if (genRequires(ei)) {
 		    s = elf_strptr(ei->elf, shdr->sh_link, dyn->d_un.d_val);
-		    if (s)
-			addDep(&ei->requires, s, NULL, ei->marker);
+		    if (s) {
+			char *libtool_ver = NULL;
+			// If soname matches an item already in the deps, then
+			// it had versioned symbols and doesn't require fallback.
+			if (libtool_version_fallback &&
+			    !findSonameInDeps(ei->requires, s)) {
+			    libtool_ver = getLibtoolVerFromShLink(s);
+			}
+			addDep(&ei->requires, s, NULL, ei->marker, ">=", libtool_ver);
+			free(libtool_ver);
+		    }
 		}
 		break;
 	    }
@@ -323,8 +443,14 @@ static int processFile(const char *fn, int dtype)
 	    const char *bn = strrchr(fn, '/');
 	    ei->soname = rstrdup(bn ? bn + 1 : fn);
 	}
-	if (ei->soname)
-	    addDep(&ei->provides, ei->soname, NULL, ei->marker);
+	if (ei->soname) {
+	    char *libtool_ver = NULL;
+	    if (libtool_version_fallback) {
+		libtool_ver = getLibtoolVer(fn);
+	    }
+	    addDep(&ei->provides, ei->soname, NULL, ei->marker, "=", libtool_ver);
+	    free(libtool_ver);
+	}
     }
 
     /* If requested and present, add dep for interpreter (ie dynamic linker) */
@@ -364,12 +490,13 @@ int main(int argc, char *argv[])
     struct poptOption opts[] = {
 	{ "provides", 'P', POPT_ARG_VAL, &provides, -1, NULL, NULL },
 	{ "requires", 'R', POPT_ARG_VAL, &requires, -1, NULL, NULL },
+	{ "libtool-version-fallback", 0, POPT_ARG_VAL, &libtool_version_fallback, -1, NULL, NULL },
 	{ "soname-only", 0, POPT_ARG_VAL, &soname_only, -1, NULL, NULL },
 	{ "no-fake-soname", 0, POPT_ARG_VAL, &fake_soname, 0, NULL, NULL },
 	{ "no-filter-soname", 0, POPT_ARG_VAL, &filter_soname, 0, NULL, NULL },
 	{ "require-interp", 0, POPT_ARG_VAL, &require_interp, -1, NULL, NULL },
 	{ "multifile", 'm', POPT_ARG_VAL, &multifile, -1, NULL, NULL },
-	POPT_AUTOHELP 
+	POPT_AUTOHELP
 	POPT_TABLEEND
     };
 
