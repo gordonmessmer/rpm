@@ -346,7 +346,7 @@ static void processDynamic(Elf_Scn *scn, GElf_Shdr *shdr, elfInfo *ei)
 			 * it had versioned symbols and doesn't require fallback.
 			 */
 			if (libtool_version_fallback &&
-			    !findSonameInDeps(ei->requires, s)) {
+			      !findSonameInDeps(ei->requires, s)) {
 			    libtool_ver = getLibtoolVerFromShLink(s);
 			}
 			addDep(&ei->requires, s, NULL, ei->marker, ">=", libtool_ver);
