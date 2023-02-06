@@ -112,7 +112,8 @@ static char *getLibtoolVerFromShLink(const char *filename)
 	if (dlinfo(dl_handle, RTLD_DI_LINKMAP, &linkmap) != -1) {
 	    version = getLibtoolVer(linkmap->l_name);
 	}
-	(void) write(pipefd[1], version, strlen(version));
+	if (version)
+	    (void) write(pipefd[1], version, strlen(version));
 	close(pipefd[1]);
 	free(version);
 	dlclose(dl_handle);
