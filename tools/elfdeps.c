@@ -90,6 +90,7 @@ static char *getLibtoolVer(const char *filename)
  */
 static char *getLibtoolVerFromShLink(const char *filename)
 {
+#if defined(HAVE_DLMOPEN) && defined(HAVE_DLINFO)
     char dest[PATH_MAX];
     int pipefd[2];
     pid_t cpid;
@@ -131,6 +132,14 @@ static char *getLibtoolVerFromShLink(const char *filename)
 	return strdup(dest);
     else
 	return NULL;
+#else
+    /*
+     * Without dlmopen and dlinfo, elfdeps cannot improve
+     * requirement lists, and will simply continue its prior
+     * behavior of unversioned dependencies.
+     */
+    return NULL;
+#endif
 }
 
 /*
