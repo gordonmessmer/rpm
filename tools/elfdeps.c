@@ -55,8 +55,10 @@ static char *getLibtoolVer(const char *filename)
 	dest[destsize] = 0;
 	filename = dest;
     }
-    // Start from the end of the string.  Verify that it ends with
-    // numbers and dots, preceded by ".so.".
+    /*
+     * Start from the end of the string.  Verify that it ends with
+     * numbers and dots, preceded by ".so.".
+     */
     so = filename + strlen(filename);
     while (so > filename+2) {
 	if (*so == '.') {
@@ -93,11 +95,11 @@ static char *getLibtoolVerFromShLink(const char *filename)
     pid_t cpid;
 
     if (pipe(pipefd) == -1) {
-	return NULL;  // Should this be a fatal error instead?
+	return NULL;  /* Should this be a fatal error instead? */
     }
     cpid = fork();
     if (cpid == -1) {
-	return NULL;  // Should this be a fatal error instead?
+	return NULL;  /* Should this be a fatal error instead? */
     }
     if (cpid == 0) {
 	void *dl_handle;
@@ -210,8 +212,10 @@ static void addDep(ARGV_t *deps,
 	return;
 
     if (compare_op && fallback_ver) {
-	// when versioned symbols aren't available, the libtool version
-	// might be used to generate a minimum dependency version.
+	/*
+	 * when versioned symbols aren't available, the libtool version
+	 * might be used to generate a minimum dependency version.
+	 */
 	rasprintf(&dep,
 		  "%s()%s %s %s", soname, marker ? marker : "",
 		  compare_op, fallback_ver);
@@ -336,8 +340,10 @@ static void processDynamic(Elf_Scn *scn, GElf_Shdr *shdr, elfInfo *ei)
 		    s = elf_strptr(ei->elf, shdr->sh_link, dyn->d_un.d_val);
 		    if (s) {
 			char *libtool_ver = NULL;
-			// If soname matches an item already in the deps, then
-			// it had versioned symbols and doesn't require fallback.
+			/*
+			 * If soname matches an item already in the deps, then
+			 * it had versioned symbols and doesn't require fallback.
+			 */
 			if (libtool_version_fallback &&
 			    !findSonameInDeps(ei->requires, s)) {
 			    libtool_ver = getLibtoolVerFromShLink(s);
