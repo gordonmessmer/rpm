@@ -40,8 +40,8 @@ typedef struct elfInfo_s {
 } elfInfo;
 
 /*
- * If filename contains ".so" followed by a version number, return
- * a copy of the version number.
+ * If filename contains ".so." followed by a version number, return a
+ * copy of the version number.
  */
 static char *getLibtoolVer(const char *filename)
 {
@@ -51,6 +51,9 @@ static char *getLibtoolVer(const char *filename)
     int found_digit = 0, found_dot = 0;
 
     destsize = readlink(filename, dest, PATH_MAX);
+    if (destsize == -1 && errno != EINVAL) {
+	exit(EXIT_FAILURE);
+    }
     if (destsize > 0) {
 	dest[destsize] = 0;
 	filename = dest;
@@ -59,13 +62,13 @@ static char *getLibtoolVer(const char *filename)
      * Start from the end of the string.  Verify that it ends with
      * numbers and dots, preceded by ".so.".
      */
-    so = filename + strlen(filename);
+    so = filename + strlen(filename) - 1;
     while (so > filename+2) {
 	if (*so == '.') {
 	    found_dot++;
 	    so--;
 	    continue;
-	} else if (strchr("0123456789", *so)) {
+	} else if (risdigit(*so)) {
 	    found_digit++;
 	    so--;
 	    continue;
@@ -96,11 +99,11 @@ static char *getLibtoolVerFromShLink(const char *filename)
     pid_t cpid;
 
     if (pipe(pipefd) == -1) {
-	return NULL;  /* Should this be a fatal error instead? */
+	exit(EXIT_FAILURE);
     }
     cpid = fork();
     if (cpid == -1) {
-	return NULL;  /* Should this be a fatal error instead? */
+	exit(EXIT_FAILURE);
     }
     if (cpid == 0) {
 	void *dl_handle;
@@ -109,10 +112,10 @@ static char *getLibtoolVerFromShLink(const char *filename)
 
 	close(pipefd[0]);
 	dl_handle = dlmopen(LM_ID_NEWLM, filename, RTLD_LAZY);
-	if (dl_handle == NULL) _exit(0);
-	if (dlinfo(dl_handle, RTLD_DI_LINKMAP, &linkmap) != -1) {
-	    version = getLibtoolVer(linkmap->l_name);
-	}
+	if (dl_handle == NULL) _exit(EXIT_FAILURE);
+	if (dlinfo(dl_handle, RTLD_DI_LINKMAP, &linkmap) == -1)
+	    _exit(EXIT_FAILURE);
+	version = getLibtoolVer(linkmap->l_name);
 	if (version)
 	    (void) write(pipefd[1], version, strlen(version));
 	close(pipefd[1]);
@@ -121,12 +124,17 @@ static char *getLibtoolVerFromShLink(const char *filename)
 	_exit(0);
     } else {
 	ssize_t len;
+	int wstatus;
+
 	close(pipefd[1]);
 	dest[0] = 0;
-	len = read(pipefd[0], dest, sizeof(dest));
+	while ((len = read(pipefd[0], dest, sizeof(dest))) == -1
+	    && errno == EINTR);
 	if (len > 0) dest[len] = 0;
 	close(pipefd[0]);
-	wait(NULL);
+	wait(&wstatus);
+	if (WIFSIGNALED(wstatus) || WEXITSTATUS(wstatus))
+	    exit(EXIT_FAILURE);
     }
     if (strlen(dest) > 0)
 	return strdup(dest);
