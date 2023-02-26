@@ -16,7 +16,7 @@
 #include <rpm/rpmstring.h>
 #include <rpm/argv.h>
 
-int libtool_version_fallback = 0;
+int full_name_version_fallback = 0;
 int soname_only = 0;
 int fake_soname = 1;
 int filter_soname = 1;
@@ -43,7 +43,7 @@ typedef struct elfInfo_s {
  * If filename is a symlink to a path that contains ".so." followed by
  * a version number, return a copy of the version number.
  */
-static char *getLibtoolVer(const char *filename)
+static char *getFullNameVer(const char *filename)
 {
     const char *so, *link_basename, *dest_basename;
     char dest[PATH_MAX];
@@ -106,7 +106,7 @@ static char *getLibtoolVer(const char *filename)
  * functions, which isn't necessarily safe, so do that in a separate
  * process.
  */
-static char *getLibtoolVerFromShLink(const char *filename)
+static char *getFullNameVerFromShLink(const char *filename)
 {
 #if defined(HAVE_DLMOPEN) && defined(HAVE_DLINFO)
     char dest[PATH_MAX];
@@ -130,7 +130,7 @@ static char *getLibtoolVerFromShLink(const char *filename)
 	if (dl_handle == NULL) _exit(EXIT_FAILURE);
 	if (dlinfo(dl_handle, RTLD_DI_LINKMAP, &linkmap) == -1)
 	    _exit(EXIT_FAILURE);
-	version = getLibtoolVer(linkmap->l_name);
+	version = getFullNameVer(linkmap->l_name);
 	if (version)
 	    (void) write(pipefd[1], version, strlen(version));
 	close(pipefd[1]);
@@ -246,7 +246,7 @@ static void addDep(ARGV_t *deps,
 
     if (compare_op && fallback_ver) {
 	/*
-	 * when versioned symbols aren't available, the libtool version
+	 * when versioned symbols aren't available, the full name version
 	 * might be used to generate a minimum dependency version.
 	 */
 	rasprintf(&dep,
@@ -372,17 +372,17 @@ static void processDynamic(Elf_Scn *scn, GElf_Shdr *shdr, elfInfo *ei)
 		if (genRequires(ei)) {
 		    s = elf_strptr(ei->elf, shdr->sh_link, dyn->d_un.d_val);
 		    if (s) {
-			char *libtool_ver = NULL;
+			char *full_name_ver = NULL;
 			/*
 			 * If soname matches an item already in the deps, then
 			 * it had versioned symbols and doesn't require fallback.
 			 */
-			if (libtool_version_fallback &&
+			if (full_name_version_fallback &&
 			      !findSonameInDeps(ei->requires, s)) {
-			    libtool_ver = getLibtoolVerFromShLink(s);
+			    full_name_ver = getFullNameVerFromShLink(s);
 			}
-			addDep(&ei->requires, s, NULL, ei->marker, ">=", libtool_ver);
-			free(libtool_ver);
+			addDep(&ei->requires, s, NULL, ei->marker, ">=", full_name_ver);
+			free(full_name_ver);
 		    }
 		}
 		break;
@@ -483,12 +483,12 @@ static int processFile(const char *fn, int dtype)
 	    ei->soname = rstrdup(bn ? bn + 1 : fn);
 	}
 	if (ei->soname) {
-	    char *libtool_ver = NULL;
-	    if (libtool_version_fallback) {
-		libtool_ver = getLibtoolVer(fn);
+	    char *full_name_ver = NULL;
+	    if (full_name_version_fallback) {
+		full_name_ver = getFullNameVer(fn);
 	    }
-	    addDep(&ei->provides, ei->soname, NULL, ei->marker, "=", libtool_ver);
-	    free(libtool_ver);
+	    addDep(&ei->provides, ei->soname, NULL, ei->marker, "=", full_name_ver);
+	    free(full_name_ver);
 	}
     }
 
@@ -529,7 +529,7 @@ int main(int argc, char *argv[])
     struct poptOption opts[] = {
 	{ "provides", 'P', POPT_ARG_VAL, &provides, -1, NULL, NULL },
 	{ "requires", 'R', POPT_ARG_VAL, &requires, -1, NULL, NULL },
-	{ "libtool-version-fallback", 0, POPT_ARG_VAL, &libtool_version_fallback, -1, NULL, NULL },
+	{ "full-name-version-fallback", 0, POPT_ARG_VAL, &full_name_version_fallback, -1, NULL, NULL },
 	{ "soname-only", 0, POPT_ARG_VAL, &soname_only, -1, NULL, NULL },
 	{ "no-fake-soname", 0, POPT_ARG_VAL, &fake_soname, 0, NULL, NULL },
 	{ "no-filter-soname", 0, POPT_ARG_VAL, &filter_soname, 0, NULL, NULL },
