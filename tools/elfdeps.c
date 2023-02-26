@@ -40,12 +40,12 @@ typedef struct elfInfo_s {
 } elfInfo;
 
 /*
- * If filename contains ".so." followed by a version number, return a
- * copy of the version number.
+ * If filename is a symlink to a path that contains ".so." followed by
+ * a version number, return a copy of the version number.
  */
 static char *getLibtoolVer(const char *filename)
 {
-    const char *so;
+    const char *so, *link_basename, *dest_basename;
     char dest[PATH_MAX];
     int destsize = 0;
     int found_digit = 0, found_dot = 0;
@@ -54,16 +54,31 @@ static char *getLibtoolVer(const char *filename)
     if (destsize == -1 && errno != EINVAL) {
 	exit(EXIT_FAILURE);
     }
-    if (destsize > 0) {
-	dest[destsize] = 0;
-	filename = dest;
+    /*
+     * filename must be a symlink and the destination must be long enough
+     * to contain ".so." and a number.
+     */
+    if ((destsize == -1 && errno == EINVAL) ||
+	(destsize < sizeof(".so.1"))) {
+	return NULL;
     }
+
+    /* The base name of filename and dest must be different. */
+    link_basename = rindex(filename, '/');
+    dest_basename = rindex(dest, '/');
+    if (link_basename == NULL) link_basename = filename;
+    if (dest_basename == NULL) dest_basename = dest;
+    if (strcmp(link_basename, dest_basename) == 0)
+	return NULL;
+
+    dest[destsize] = 0;
+
     /*
      * Start from the end of the string.  Verify that it ends with
-     * numbers and dots, preceded by ".so.".
+     * numbers and optionally dots, preceded by ".so.".
      */
-    so = filename + strlen(filename) - 1;
-    while (so > filename+2) {
+    so = dest + strlen(dest) - 1;
+    while (so > dest+2) {
 	if (*so == '.') {
 	    found_dot++;
 	    so--;
@@ -74,7 +89,7 @@ static char *getLibtoolVer(const char *filename)
 	    continue;
 	} else if (strncmp(so-2, ".so.", 4) == 0) {
 	    so+=2;
-	    if (found_digit && found_dot > 1) {
+	    if (found_digit) {
 		return strdup(so);
 	    }
 	    break;
