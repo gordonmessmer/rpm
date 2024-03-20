@@ -41,14 +41,13 @@ typedef struct elfInfo_s {
 
 /*
  * If filename is a symlink to a path that contains ".so." followed by
- * a version number, return a copy of the version number.
+ * a version number, return a copy of its _elf_version
  */
 static char *getFullNameVer(const char *filename)
 {
-    const char *so, *link_basename, *dest_basename;
+    char *link_basename, *dest_basename;
     char dest[PATH_MAX];
     int destsize = 0;
-    int found_digit = 0, found_dot = 0;
 
     destsize = readlink(filename, dest, PATH_MAX);
     if (destsize == -1 && errno != EINVAL) {
@@ -66,38 +65,38 @@ static char *getFullNameVer(const char *filename)
     /* The base name of filename and dest must be different. */
     link_basename = rindex(filename, '/');
     dest_basename = rindex(dest, '/');
-    if (link_basename == NULL) link_basename = filename;
+    if (link_basename == NULL) link_basename = (char *)filename;
     if (dest_basename == NULL) dest_basename = dest;
     if (strcmp(link_basename, dest_basename) == 0)
 	return NULL;
+    if (strstr(link_basename, ".so") == NULL)
+	return NULL;
 
-    dest[destsize] = 0;
+    {
+	char elf_version_path[PATH_MAX];
+	char elf_version[64];
+	int elf_version_fd, bytes_read;
 
-    /*
-     * Start from the end of the string.  Verify that it ends with
-     * numbers and optionally dots, preceded by ".so.".
-     */
-    so = dest + strlen(dest) - 1;
-    while (so > dest+2) {
-	if (*so == '.') {
-	    found_dot++;
-	    so--;
-	    continue;
-	} else if (risdigit(*so)) {
-	    found_digit++;
-	    so--;
-	    continue;
-	} else if (strncmp(so-2, ".so.", 4) == 0) {
-	    so+=2;
-	    if (found_digit) {
-		return strdup(so);
-	    }
-	    break;
+	/* If no '/' character was found, construct a relative path */
+	if (link_basename != filename) {
+	    link_basename[0] = 0;
+	    link_basename++;
+	    snprintf(elf_version_path, sizeof(elf_version_path),
+		     "%s/.elf-version/%s", filename, link_basename);
 	} else {
-	    break;
+	    snprintf(elf_version_path, sizeof(elf_version_path),
+		     "./.elf-version/%s", link_basename);
 	}
+	elf_version_fd = open(elf_version_path, O_RDONLY);
+	if (elf_version_fd == -1)
+	    return NULL;
+	bytes_read = read(elf_version_fd, elf_version, sizeof(elf_version));
+	close(elf_version_fd);
+	if (bytes_read <= 0)
+	    return NULL;
+	if (elf_version[bytes_read-1] == '\n') elf_version[bytes_read-1] = 0;
+	return strdup(elf_version);
     }
-    return NULL;
 }
 
 /*
