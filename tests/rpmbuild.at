@@ -1974,6 +1974,7 @@ export LD_LIBRARY_PATH=/usr/local/lib64
 runroot chmod a-x /data/misc/helloexe
 runroot ${RPM_CONFIGDIR_PATH}/elfdeps -R --elf-so-version-fallback true ${RPMTEST}/data/misc/helloexe
 runroot chmod a+x /data/misc/helloexe
+runroot ldd  /data/misc/helloexe
 runroot strace -f -s 512 ${RPM_CONFIGDIR_PATH}/elfdeps -R --elf-so-version-fallback true ${RPMTEST}/data/misc/helloexe
 ],
 [0],
