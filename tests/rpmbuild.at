@@ -1952,7 +1952,6 @@ RPMTEST_CHECK([
 RPMDB_RESET
 tpkg="/data/RPMS/libhello-1.0.1-1.x86_64.rpm"
 runroot rpm -U --nodeps --ignorearch --nosignature "${tpkg}"
-export LD_LIBRARY_PATH=/usr/local/lib64
 
 runroot ldconfig
 runroot chmod a-x /usr/local/lib64/libhello.so
@@ -1972,11 +1971,11 @@ tpkg="/data/RPMS/libhello-1.0.1-1.x86_64.rpm"
 runroot rpm -U --nodeps --ignorearch --nosignature "${tpkg}"
 export LD_LIBRARY_PATH=/usr/local/lib64
 
+runroot ldconfig
 runroot chmod a-x /data/misc/helloexe
 runroot ${RPM_CONFIGDIR_PATH}/elfdeps -R --elf-so-version-fallback true ${RPMTEST}/data/misc/helloexe
 runroot chmod a+x /data/misc/helloexe
-runroot ldd  /data/misc/helloexe
-runroot strace -f -s 512 ${RPM_CONFIGDIR_PATH}/elfdeps -R --elf-so-version-fallback true ${RPMTEST}/data/misc/helloexe
+runroot ${RPM_CONFIGDIR_PATH}/elfdeps -R --elf-so-version-fallback true ${RPMTEST}/data/misc/helloexe
 ],
 [0],
 [libc.so.6(GLIBC_2.2.5)(64bit)
@@ -1992,10 +1991,11 @@ tpkg="/data/RPMS/libhello-1.0.1-1.x86_64.rpm"
 runroot rpm -U --nodeps --ignorearch --nosignature "${tpkg}"
 export LD_LIBRARY_PATH=/usr/local/lib64
 
+runroot ldconfig
 runroot chmod a-x /data/misc/hellopie
 runroot ${RPM_CONFIGDIR_PATH}/elfdeps -R --elf-so-version-fallback true ${RPMTEST}/data/misc/hellopie
 runroot chmod a+x /data/misc/hellopie
-runroot strace -f -s 512 ${RPM_CONFIGDIR_PATH}/elfdeps -R --elf-so-version-fallback true ${RPMTEST}/data/misc/hellopie
+runroot ${RPM_CONFIGDIR_PATH}/elfdeps -R --elf-so-version-fallback true ${RPMTEST}/data/misc/hellopie
 ],
 [0],
 [libc.so.6(GLIBC_2.2.5)(64bit)
