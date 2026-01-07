@@ -1973,9 +1973,9 @@ export LD_LIBRARY_PATH=/usr/local/lib64
 
 runroot ldconfig
 runroot chmod a-x /data/misc/helloexe
-runroot ${RPM_CONFIGDIR_PATH}/elfdeps -R --elf-so-version-fallback true ${RPMTEST}/data/misc/helloexe
+runroot ${RPM_CONFIGDIR_PATH}/elfdeps -R --elf-so-version-fallback true /data/misc/helloexe
 runroot chmod a+x /data/misc/helloexe
-runroot ${RPM_CONFIGDIR_PATH}/elfdeps -R --elf-so-version-fallback true ${RPMTEST}/data/misc/helloexe
+runroot ${RPM_CONFIGDIR_PATH}/elfdeps -R --elf-so-version-fallback true /data/misc/helloexe
 ],
 [0],
 [libc.so.6(GLIBC_2.2.5)(64bit)
@@ -1993,9 +1993,9 @@ export LD_LIBRARY_PATH=/usr/local/lib64
 
 runroot ldconfig
 runroot chmod a-x /data/misc/hellopie
-runroot ${RPM_CONFIGDIR_PATH}/elfdeps -R --elf-so-version-fallback true ${RPMTEST}/data/misc/hellopie
+runroot ${RPM_CONFIGDIR_PATH}/elfdeps -R --elf-so-version-fallback true /data/misc/hellopie
 runroot chmod a+x /data/misc/hellopie
-runroot ${RPM_CONFIGDIR_PATH}/elfdeps -R --elf-so-version-fallback true ${RPMTEST}/data/misc/hellopie
+runroot ${RPM_CONFIGDIR_PATH}/elfdeps -R --elf-so-version-fallback true /data/misc/hellopie
 ],
 [0],
 [libc.so.6(GLIBC_2.2.5)(64bit)
