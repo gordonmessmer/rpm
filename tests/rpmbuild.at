@@ -1954,6 +1954,7 @@ tpkg="/data/RPMS/libhello-1.0.1-1.x86_64.rpm"
 runroot rpm -U --nodeps --ignorearch --nosignature "${tpkg}"
 export LD_LIBRARY_PATH=/usr/local/lib64
 
+runroot ldconfig
 runroot chmod a-x /usr/local/lib64/libhello.so
 runroot ${RPM_CONFIGDIR_PATH}/elfdeps -P --elf-so-version-fallback 1.0.1 /usr/local/lib64/libhello.so
 runroot chmod a+x /usr/local/lib64/libhello.so
