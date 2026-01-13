@@ -2,6 +2,7 @@
 
 #include <array>
 #include <format>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -14,6 +15,7 @@
 #include <errno.h>
 #include <popt.h>
 #include <gelf.h>
+#include <sqlite3.h>
 
 #include <link.h>
 #include <dlfcn.h>
@@ -26,6 +28,7 @@ int fake_soname = 1;
 int filter_soname = 1;
 int require_interp = 0;
 int multifile = 0;
+const char *abi_database_path = nullptr;
 
 struct elfInfo {
     Elf *elf;
@@ -104,6 +107,268 @@ static std::string getFullNameVer(const char *filename)
     }
 
     return "";
+}
+
+/*
+ * Extract all undefined global symbols from the binary's .dynsym section.
+ * These are symbols that the binary needs from its dependencies.
+ */
+static std::set<std::string> extractUndefinedSymbols(elfInfo *ei)
+{
+    std::set<std::string> undefined_symbols;
+    Elf_Scn *scn = NULL;
+
+    while ((scn = elf_nextscn(ei->elf, scn)) != NULL) {
+        GElf_Shdr shdr_mem, *shdr;
+        shdr = gelf_getshdr(scn, &shdr_mem);
+        if (shdr == NULL)
+            continue;
+
+        /* Only process dynamic symbol table */
+        if (shdr->sh_type != SHT_DYNSYM)
+            continue;
+
+        if (shdr->sh_entsize == 0)
+            continue;
+
+        Elf_Data *data = NULL;
+        while ((data = elf_getdata(scn, data)) != NULL) {
+            unsigned int nsyms = shdr->sh_size / shdr->sh_entsize;
+
+            for (unsigned int i = 0; i < nsyms; i++) {
+                GElf_Sym sym_mem, *sym;
+                sym = gelf_getsym(data, i, &sym_mem);
+                if (sym == NULL)
+                    continue;
+
+                /* Check if symbol is undefined and has global binding */
+                if (sym->st_shndx == SHN_UNDEF &&
+                    GELF_ST_BIND(sym->st_info) == STB_GLOBAL) {
+                    const char *symname = elf_strptr(ei->elf, shdr->sh_link, sym->st_name);
+                    if (symname && *symname) {
+                        undefined_symbols.insert(symname);
+                    }
+                }
+            }
+        }
+    }
+
+    return undefined_symbols;
+}
+
+/*
+ * Check which symbols from the undefined set are provided by the given library.
+ * Opens the library ELF file and checks its dynamic symbol table for defined symbols.
+ */
+static std::set<std::string> getProvidedSymbols(const char *lib_path,
+                                                  const std::set<std::string> &undefined_symbols)
+{
+    std::set<std::string> provided_symbols;
+
+    if (undefined_symbols.empty())
+        return provided_symbols;
+
+    int fd = open(lib_path, O_RDONLY);
+    if (fd < 0)
+        return provided_symbols;
+
+    elf_version(EV_CURRENT);
+    Elf *elf = elf_begin(fd, ELF_C_READ, NULL);
+    if (elf == NULL || elf_kind(elf) != ELF_K_ELF)
+        goto cleanup;
+
+    Elf_Scn *scn = NULL;
+    while ((scn = elf_nextscn(elf, scn)) != NULL) {
+        GElf_Shdr shdr_mem, *shdr;
+        shdr = gelf_getshdr(scn, &shdr_mem);
+        if (shdr == NULL)
+            continue;
+
+        /* Only process dynamic symbol table */
+        if (shdr->sh_type != SHT_DYNSYM)
+            continue;
+
+        if (shdr->sh_entsize == 0)
+            continue;
+
+        Elf_Data *data = NULL;
+        while ((data = elf_getdata(scn, data)) != NULL) {
+            unsigned int nsyms = shdr->sh_size / shdr->sh_entsize;
+
+            for (unsigned int i = 0; i < nsyms; i++) {
+                GElf_Sym sym_mem, *sym;
+                sym = gelf_getsym(data, i, &sym_mem);
+                if (sym == NULL)
+                    continue;
+
+                /* Check if symbol is defined and has global binding */
+                if (sym->st_shndx != SHN_UNDEF &&
+                    GELF_ST_BIND(sym->st_info) == STB_GLOBAL) {
+                    const char *symname = elf_strptr(elf, shdr->sh_link, sym->st_name);
+                    if (symname && *symname) {
+                        /* Check if this symbol is in our undefined set */
+                        if (undefined_symbols.count(symname)) {
+                            provided_symbols.insert(symname);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+cleanup:
+    if (elf)
+        elf_end(elf);
+    if (fd >= 0)
+        close(fd);
+
+    return provided_symbols;
+}
+
+/*
+ * Query the ABI database for the maximum first_version of the given symbols
+ * in the specified library. Returns empty string on error or if no symbols found.
+ */
+static std::string getMaxVersionFromAbiDb(const char *db_path, const char *lib_path,
+                                           const std::set<std::string> &symbols)
+{
+    std::string max_version;
+
+    if (symbols.empty() || !db_path || !lib_path)
+        return max_version;
+
+    sqlite3 *db = nullptr;
+    if (sqlite3_open_v2(db_path, &db, SQLITE_OPEN_READONLY, nullptr) != SQLITE_OK)
+        return max_version;
+
+    /* Build SQL query with IN clause for symbols */
+    std::string sql = "SELECT MAX(s.first_version) FROM symbols s "
+                      "JOIN files f ON s.file_id = f.file_id "
+                      "WHERE f.file_path = ? AND s.symbol_name IN (";
+
+    /* Add placeholders for symbols */
+    for (size_t i = 0; i < symbols.size(); i++) {
+        if (i > 0) sql += ",";
+        sql += "?";
+    }
+    sql += ")";
+
+    sqlite3_stmt *stmt = nullptr;
+    if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, nullptr) != SQLITE_OK)
+        goto cleanup;
+
+    /* Bind library path */
+    if (sqlite3_bind_text(stmt, 1, lib_path, -1, SQLITE_STATIC) != SQLITE_OK)
+        goto cleanup;
+
+    /* Bind symbol names */
+    int bind_idx = 2;
+    for (const auto &sym : symbols) {
+        if (sqlite3_bind_text(stmt, bind_idx++, sym.c_str(), -1, SQLITE_STATIC) != SQLITE_OK)
+            goto cleanup;
+    }
+
+    /* Execute query and get result */
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        const unsigned char *version = sqlite3_column_text(stmt, 0);
+        if (version) {
+            max_version = reinterpret_cast<const char*>(version);
+        }
+    }
+
+cleanup:
+    if (stmt)
+        sqlite3_finalize(stmt);
+    if (db)
+        sqlite3_close(db);
+
+    return max_version;
+}
+
+/*
+ * Query the ABI database to determine the minimum version required based on
+ * symbol usage. Uses dlmopen to resolve the library path, extracts undefined
+ * symbols from the binary, checks which are provided by the library, and
+ * queries the database for the maximum first_version.
+ */
+static std::string getVersionFromAbiDb(const char *filename, elfInfo *ei)
+{
+#if defined(HAVE_DLMOPEN) && defined(HAVE_DLINFO)
+    if (!abi_database_path)
+        return "";
+
+    std::array<int, 2> pipefd;
+
+    if (pipe(pipefd.data()) == -1) {
+        exit(EXIT_FAILURE);
+    }
+
+    pid_t cpid = fork();
+    if (cpid == -1) {
+        exit(EXIT_FAILURE);
+    }
+
+    if (cpid == 0) {
+        // Child process
+        close(pipefd[0]);
+
+        void *dl_handle = dlmopen(LM_ID_NEWLM, filename, RTLD_LAZY);
+        if (dl_handle == nullptr) {
+            _exit(EXIT_FAILURE);
+        }
+
+        struct link_map *linkmap;
+        if (dlinfo(dl_handle, RTLD_DI_LINKMAP, &linkmap) == -1) {
+            _exit(EXIT_FAILURE);
+        }
+
+        /* Get the resolved library path (symlink) */
+        std::string lib_path = linkmap->l_name;
+
+        /* Extract undefined symbols from the binary */
+        std::set<std::string> undefined_symbols = extractUndefinedSymbols(ei);
+
+        /* Check which symbols the library provides */
+        std::set<std::string> provided_symbols = getProvidedSymbols(lib_path.c_str(), undefined_symbols);
+
+        /* Query database for max version */
+        std::string version = getMaxVersionFromAbiDb(abi_database_path, lib_path.c_str(), provided_symbols);
+
+        if (!version.empty()) {
+            if (write(pipefd[1], version.c_str(), version.size()) < 0)
+                _exit(EXIT_FAILURE);
+        }
+
+        close(pipefd[1]);
+        dlclose(dl_handle);
+        _exit(0);
+    } else {
+        // Parent process
+        close(pipefd[1]);
+
+        std::string result;
+        char buffer[PATH_MAX];
+        ssize_t len;
+
+        while ((len = read(pipefd[0], buffer, sizeof(buffer))) == -1 && errno == EINTR);
+
+        if (len > 0) {
+            result.assign(buffer, len);
+        }
+
+        close(pipefd[0]);
+
+        int wstatus;
+        wait(&wstatus);
+        if (WIFSIGNALED(wstatus) || WEXITSTATUS(wstatus)) {
+            exit(EXIT_FAILURE);
+        }
+
+        return result;
+    }
+#else
+    return "";
+#endif
 }
 
 /*
@@ -389,7 +654,14 @@ static void processDynamic(Elf_Scn *scn, GElf_Shdr *shdr, elfInfo *ei)
 			 */
 			if (full_name_version_fallback &&
 			    !findSonameInDeps(ei->requires_, s)) {
-			    full_name_ver = getFullNameVerFromShLink(s);
+			    /* Try ABI database approach first if available */
+			    if (abi_database_path) {
+				full_name_ver = getVersionFromAbiDb(s, ei);
+			    }
+			    /* Fall back to symlink-based version detection */
+			    if (full_name_ver.empty()) {
+				full_name_ver = getFullNameVerFromShLink(s);
+			    }
 			}
 			if (!full_name_ver.empty()) {
 			    addSoDep(ei->requires_, s, "", ei->marker, ">=", full_name_ver);
@@ -542,6 +814,7 @@ int main(int argc, char *argv[])
 	{ "provides", 'P', POPT_ARG_VAL, &provides, -1, NULL, NULL },
 	{ "requires", 'R', POPT_ARG_VAL, &requires_, -1, NULL, NULL },
 	{ "full-name-version-fallback", 0, POPT_ARG_VAL, &full_name_version_fallback, -1, NULL, NULL },
+	{ "abi-database-path", 0, POPT_ARG_STRING, &abi_database_path, 0, NULL, NULL },
 	{ "soname-only", 0, POPT_ARG_VAL, &soname_only, -1, NULL, NULL },
 	{ "no-fake-soname", 0, POPT_ARG_VAL, &fake_soname, 0, NULL, NULL },
 	{ "no-filter-soname", 0, POPT_ARG_VAL, &filter_soname, 0, NULL, NULL },
